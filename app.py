@@ -83,11 +83,10 @@ def rule_check(url):
 # ========== VIRUSTOTAL – CACHED FIRST, THEN POLL ==========
 def vt_check(url, api_key, max_wait=VT_MAX_WAIT):
     if not api_key:
-        return None, None, None
+        return None, None, "No API key set"
 
     headers = {"x-apikey": api_key}
     try:
-        # 1. Try to fetch cached report (instant)
         url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
         report_url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
         r = requests.get(report_url, headers=headers, timeout=10)
@@ -104,47 +103,14 @@ def vt_check(url, api_key, max_wait=VT_MAX_WAIT):
                         "category": result["category"],
                         "result": result["result"]
                     })
-            return stats, detections, None   # ✅ cached result found
-
-        # 2. Not cached → submit a new scan
-        r = requests.post("https://www.virustotal.com/api/v3/urls",
-                          headers=headers, data={"url": url}, timeout=10)
-        if r.status_code != 200:
-            return None, None, f"Submission error: {r.status_code}"
-
-        analysis_id = r.json()["data"]["id"]
-
-        # 3. Poll for completion (limited time)
-        start = time.time()
-        while time.time() - start < max_wait:
-            r = requests.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
-                             headers=headers, timeout=10)
-            if r.status_code != 200:
-                return None, None, f"Analysis fetch error: {r.status_code}"
-
-            data = r.json()["data"]
-            status = data["attributes"]["status"]
-            if status == "completed":
-                stats = data["attributes"]["stats"]
-                # Get detailed vendor results
-                r2 = requests.get(report_url, headers=headers, timeout=10)
-                detections = []
-                if r2.status_code == 200:
-                    results = r2.json()["data"]["attributes"]["last_analysis_results"]
-                    for vendor, result in results.items():
-                        if result["category"] in ["malicious", "suspicious"]:
-                            detections.append({
-                                "vendor": vendor,
-                                "category": result["category"],
-                                "result": result["result"]
-                            })
-                return stats, detections, None
-            time.sleep(2)
-
-        return None, None, f"Analysis timed out after {max_wait}s"
+            # Return extra debug info
+            return stats, detections, f"✅ Cached report found. Stats: {stats}"
+        else:
+            # If not cached, we could try to submit, but for debug we return error
+            return None, None, f"❌ No cached report. Status: {r.status_code}, Response: {r.text[:200]}"
 
     except Exception as e:
-        return None, None, str(e)
+        return None, None, f"⚠️ Exception: {str(e)}"
 
 # ========== FLASK ROUTES ==========
 @app.route('/')
