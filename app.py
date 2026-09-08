@@ -1,7 +1,7 @@
 import re
 import time
 import base64
-
+import os
 import requests
 from flask import Flask, render_template, request, jsonify
 from urllib.parse import urlparse
@@ -9,10 +9,11 @@ from urllib.parse import urlparse
 app = Flask(__name__)
 
 # ============================================================
-# 🔑 SET YOUR VIRUSTOTAL API KEY HERE (ONCE)
+# 🔑 API KEY – HARDCODED OR FROM ENVIRONMENT
 # ============================================================
-VIRUSTOTAL_API_KEY = "b77289cdbd662ce006893cdb48207da19f1fac3769d08ac8c46bfea264da13a6"   # <--- Replace with your key
-VT_MAX_WAIT = 60   # seconds to wait for scan completion
+# For Vercel, use environment variable. For local testing, hardcode.
+VIRUSTOTAL_API_KEY = os.environ.get("b77289cdbd662ce006893cdb48207da19f1fac3769d08ac8c46bfea264da13a6")
+VT_MAX_WAIT = 6   # seconds – stay under Vercel's 10s limit
 
 # ========== LOCAL RULES (instant) ==========
 BAD_KEYWORDS = [
@@ -80,14 +81,33 @@ def rule_check(url):
     except:
         return 0, ['Invalid URL format']
 
-# ========== VIRUSTOTAL WITH POLLING ==========
+# ========== VIRUSTOTAL – CACHED FIRST, THEN POLL ==========
 def vt_check(url, api_key, max_wait=VT_MAX_WAIT):
     if not api_key:
-        return None, None, None
+        return None, None, "No API key provided"
 
     headers = {"x-apikey": api_key}
     try:
-        # Submit URL
+        # 1. Try to fetch cached report (instant)
+        url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
+        report_url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
+        r = requests.get(report_url, headers=headers, timeout=10)
+
+        if r.status_code == 200:
+            data = r.json()["data"]["attributes"]
+            stats = data.get("last_analysis_stats", {})
+            results = data.get("last_analysis_results", {})
+            detections = []
+            for vendor, result in results.items():
+                if result["category"] in ["malicious", "suspicious"]:
+                    detections.append({
+                        "vendor": vendor,
+                        "category": result["category"],
+                        "result": result["result"]
+                    })
+            return stats, detections, None   # ✅ cached result found
+
+        # 2. Not cached → submit a new scan
         r = requests.post("https://www.virustotal.com/api/v3/urls",
                           headers=headers, data={"url": url}, timeout=10)
         if r.status_code != 200:
@@ -95,7 +115,7 @@ def vt_check(url, api_key, max_wait=VT_MAX_WAIT):
 
         analysis_id = r.json()["data"]["id"]
 
-        # Poll for completion
+        # 3. Poll for completion (limited time)
         start = time.time()
         while time.time() - start < max_wait:
             r = requests.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
@@ -108,8 +128,6 @@ def vt_check(url, api_key, max_wait=VT_MAX_WAIT):
             if status == "completed":
                 stats = data["attributes"]["stats"]
                 # Get detailed vendor results
-                url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
-                report_url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
                 r2 = requests.get(report_url, headers=headers, timeout=10)
                 detections = []
                 if r2.status_code == 200:
