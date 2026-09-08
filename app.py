@@ -1,6 +1,7 @@
 import re
 import time
 import base64
+import os
 import requests
 from flask import Flask, render_template, request, jsonify
 from urllib.parse import urlparse
@@ -10,8 +11,8 @@ app = Flask(__name__)
 # ============================================================
 # 🔑 SET YOUR VIRUSTOTAL API KEY HERE (ONCE)
 # ============================================================
-VIRUSTOTAL_API_KEY = "b77289cdbd662ce006893cdb48207da19f1fac3769d08ac8c46bfea264da13a6"   # <--- Replace with your key
-VT_MAX_WAIT = 60   # seconds to wait for scan completion
+VIRUSTOTAL_API_KEY = os.environ.get ("b77289cdbd662ce006893cdb48207da19f1fac3769d08ac8c46bfea264da13a6")  # <--- Replace with your key
+VT_MAX_WAIT = 6   # seconds to wait for scan completion
 
 # ========== LOCAL RULES (instant) ==========
 BAD_KEYWORDS = [
