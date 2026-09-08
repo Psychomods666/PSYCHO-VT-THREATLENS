@@ -1,7 +1,7 @@
 import re
 import time
 import base64
-import os
+
 import requests
 from flask import Flask, render_template, request, jsonify
 from urllib.parse import urlparse
@@ -9,10 +9,10 @@ from urllib.parse import urlparse
 app = Flask(__name__)
 
 # ============================================================
-# 🔑 READ API KEY FROM ENVIRONMENT (Vercel)
+# 🔑 SET YOUR VIRUSTOTAL API KEY HERE (ONCE)
 # ============================================================
-VIRUSTOTAL_API_KEY = os.environ.get("b77289cdbd662ce006893cdb48207da19f1fac3769d08ac8c46bfea264da13a6")
-VT_MAX_WAIT = 8   # seconds – stay under Vercel's 10s limit
+VIRUSTOTAL_API_KEY = "b77289cdbd662ce006893cdb48207da19f1fac3769d08ac8c46bfea264da13a6"   # <--- Replace with your key
+VT_MAX_WAIT = 60   # seconds to wait for scan completion
 
 # ========== LOCAL RULES (instant) ==========
 BAD_KEYWORDS = [
@@ -80,37 +80,54 @@ def rule_check(url):
     except:
         return 0, ['Invalid URL format']
 
-# ========== VIRUSTOTAL – CACHED FIRST, THEN POLL ==========
+# ========== VIRUSTOTAL WITH POLLING ==========
 def vt_check(url, api_key, max_wait=VT_MAX_WAIT):
     if not api_key:
-        return None, None, "No API key set"
+        return None, None, None
 
     headers = {"x-apikey": api_key}
     try:
-        url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
-        report_url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
-        r = requests.get(report_url, headers=headers, timeout=10)
+        # Submit URL
+        r = requests.post("https://www.virustotal.com/api/v3/urls",
+                          headers=headers, data={"url": url}, timeout=10)
+        if r.status_code != 200:
+            return None, None, f"Submission error: {r.status_code}"
 
-        if r.status_code == 200:
-            data = r.json()["data"]["attributes"]
-            stats = data.get("last_analysis_stats", {})
-            results = data.get("last_analysis_results", {})
-            detections = []
-            for vendor, result in results.items():
-                if result["category"] in ["malicious", "suspicious"]:
-                    detections.append({
-                        "vendor": vendor,
-                        "category": result["category"],
-                        "result": result["result"]
-                    })
-            # Return extra debug info
-            return stats, detections, f"✅ Cached report found. Stats: {stats}"
-        else:
-            # If not cached, we could try to submit, but for debug we return error
-            return None, None, f"❌ No cached report. Status: {r.status_code}, Response: {r.text[:200]}"
+        analysis_id = r.json()["data"]["id"]
+
+        # Poll for completion
+        start = time.time()
+        while time.time() - start < max_wait:
+            r = requests.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
+                             headers=headers, timeout=10)
+            if r.status_code != 200:
+                return None, None, f"Analysis fetch error: {r.status_code}"
+
+            data = r.json()["data"]
+            status = data["attributes"]["status"]
+            if status == "completed":
+                stats = data["attributes"]["stats"]
+                # Get detailed vendor results
+                url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
+                report_url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
+                r2 = requests.get(report_url, headers=headers, timeout=10)
+                detections = []
+                if r2.status_code == 200:
+                    results = r2.json()["data"]["attributes"]["last_analysis_results"]
+                    for vendor, result in results.items():
+                        if result["category"] in ["malicious", "suspicious"]:
+                            detections.append({
+                                "vendor": vendor,
+                                "category": result["category"],
+                                "result": result["result"]
+                            })
+                return stats, detections, None
+            time.sleep(2)
+
+        return None, None, f"Analysis timed out after {max_wait}s"
 
     except Exception as e:
-        return None, None, f"⚠️ Exception: {str(e)}"
+        return None, None, str(e)
 
 # ========== FLASK ROUTES ==========
 @app.route('/')
