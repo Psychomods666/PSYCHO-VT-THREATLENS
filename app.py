@@ -12,7 +12,7 @@ app = Flask(__name__)
 # 🔑 SET YOUR VIRUSTOTAL API KEY HERE (ONCE)
 # ============================================================
 VIRUSTOTAL_API_KEY = os.environ.get ("b77289cdbd662ce006893cdb48207da19f1fac3769d08ac8c46bfea264da13a6")  # <--- Replace with your key
-VT_MAX_WAIT = 6   # seconds to wait for scan completion
+VT_MAX_WAIT = 60   # seconds to wait for scan completion
 
 # ========== LOCAL RULES (instant) ==========
 BAD_KEYWORDS = [
